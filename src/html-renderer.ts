@@ -334,7 +334,7 @@ export class HtmlRenderer {
 		const pages = this.groupByPageBreaks(sections);
 		let prevProps = null;
 
-		for (let i = 0, l = pages.length; i < l; i++) {			
+		for (let i = 0, l = pages.length; i < l; i++) {
 			this.currentFootnoteIds = [];
 
 			const section = pages[i][0];
@@ -367,7 +367,190 @@ export class HtmlRenderer {
 			prevProps = props;
 		}
 
+		// Apply realtime page breaking if enabled
+		if (this.options.enableRealtimePageBreaking) {
+			return this.performRealtimePageBreaking(result, document);
+		}
+
 		return result;
+	}
+
+	performRealtimePageBreaking(pages: HTMLElement[], document: DocumentElement): HTMLElement[] {
+		const result: HTMLElement[] = [];
+
+		for (const page of pages) {
+			// Get section properties from the page
+			const sectProps = this.getSectionPropertiesFromPage(page);
+
+			if (!sectProps || !sectProps.pageSize || !sectProps.pageMargins) {
+				// If we can't determine page properties, keep the page as-is
+				result.push(page);
+				continue;
+			}
+
+			// Calculate available content height
+			const availableHeight = this.calculateAvailableContentHeight(page, sectProps);
+
+			if (availableHeight <= 0) {
+				result.push(page);
+				continue;
+			}
+
+			// Split the page if content exceeds available height
+			const splitPages = this.splitPageByHeight(page, sectProps, availableHeight, document);
+			result.push(...splitPages);
+		}
+
+		return result;
+	}
+
+	getSectionPropertiesFromPage(page: HTMLElement): SectionProperties | null {
+		// Extract section properties from the page's inline styles and structure
+		// This is a helper method to recover section properties from rendered page
+		const pageSize = {
+			width: page.style.width || '8.5in',
+			height: page.style.minHeight || '11in',
+			orientation: 'portrait' as "landscape" | string
+		};
+
+		const pageMargins = {
+			top: page.style.paddingTop || '1in',
+			right: page.style.paddingRight || '1in',
+			bottom: page.style.paddingBottom || '1in',
+			left: page.style.paddingLeft || '1in',
+			header: '0.5in',
+			footer: '0.5in',
+			gutter: '0in'
+		};
+
+		return {
+			type: 'nextPage',
+			pageSize,
+			pageMargins,
+			pageBorders: null,
+			pageNumber: null,
+			columns: null,
+			footerRefs: [],
+			headerRefs: [],
+			titlePage: false
+		};
+	}
+
+	calculateAvailableContentHeight(page: HTMLElement, sectProps: SectionProperties): number {
+		// Convert page height to pixels
+		const pageHeight = this.lengthToPixels(sectProps.pageSize.height);
+		const topMargin = this.lengthToPixels(sectProps.pageMargins.top);
+		const bottomMargin = this.lengthToPixels(sectProps.pageMargins.bottom);
+
+		// Get header and footer heights
+		const header = page.querySelector('header');
+		const footer = page.querySelector('footer');
+		const headerHeight = header ? header.getBoundingClientRect().height : 0;
+		const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
+
+		// Calculate available height for content
+		return pageHeight - topMargin - bottomMargin - headerHeight - footerHeight;
+	}
+
+	splitPageByHeight(page: HTMLElement, sectProps: SectionProperties, availableHeight: number, document: DocumentElement): HTMLElement[] {
+		const result: HTMLElement[] = [];
+		const articles = Array.from(page.querySelectorAll('article'));
+
+		if (articles.length === 0) {
+			result.push(page);
+			return result;
+		}
+
+		// Collect all content elements
+		const allElements: HTMLElement[] = [];
+		for (const article of articles) {
+			allElements.push(...Array.from(article.children) as HTMLElement[]);
+		}
+
+		// Store header and footer for reuse
+		const header = page.querySelector('header');
+		const footer = page.querySelector('footer');
+
+		// Check if content actually exceeds available height
+		let totalContentHeight = 0;
+		for (const elem of allElements) {
+			totalContentHeight += elem.getBoundingClientRect().height;
+		}
+
+		// If content fits on one page, return original page
+		if (totalContentHeight <= availableHeight) {
+			result.push(page);
+			return result;
+		}
+
+		// Content exceeds page height, need to split
+		let currentPage: HTMLElement | null = null;
+		let currentArticle: HTMLElement | null = null;
+		let currentHeight = 0;
+
+		for (let i = 0; i < allElements.length; i++) {
+			const element = allElements[i];
+			const elementHeight = element.getBoundingClientRect().height;
+
+			// Create new page if needed
+			if (currentPage === null || (currentHeight + elementHeight > availableHeight && currentHeight > 0)) {
+				// Save current page if exists
+				if (currentPage !== null) {
+					// Add footer to current page
+					if (footer) {
+						currentPage.appendChild(footer.cloneNode(true));
+					}
+					result.push(currentPage);
+				}
+
+				// Create new page
+				currentPage = this.createPageElement(this.className, sectProps);
+				this.renderStyleValues(document.cssStyle, currentPage);
+
+				// Add header to new page
+				if (header) {
+					currentPage.appendChild(header.cloneNode(true));
+				}
+
+				// Create new article for content
+				currentArticle = this.createSectionContent(sectProps);
+				currentPage.appendChild(currentArticle);
+
+				// Reset height counter
+				currentHeight = 0;
+			}
+
+			// Add element to current article
+			if (currentArticle) {
+				currentArticle.appendChild(element.cloneNode(true));
+				currentHeight += elementHeight;
+			}
+		}
+
+		// Add the last page
+		if (currentPage !== null) {
+			if (footer) {
+				currentPage.appendChild(footer.cloneNode(true));
+			}
+			result.push(currentPage);
+		}
+
+		return result;
+	}
+
+	lengthToPixels(length: string): number {
+		if (!length) return 0;
+
+		// Create a temporary element to measure the length
+		const temp = this.htmlDocument.createElement('div');
+		temp.style.position = 'absolute';
+		temp.style.visibility = 'hidden';
+		temp.style.height = length;
+		this.htmlDocument.body.appendChild(temp);
+		const pixels = temp.getBoundingClientRect().height;
+		this.htmlDocument.body.removeChild(temp);
+
+		return pixels;
 	}
 
 	renderHeaderFooter(refs: FooterHeaderReference[], props: SectionProperties, page: number, firstOfSection: boolean, into: HTMLElement) {

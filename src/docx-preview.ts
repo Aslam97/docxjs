@@ -22,6 +22,7 @@ export interface Options {
 	renderChanges: boolean;
     renderComments: boolean;
     renderAltChunks: boolean;
+    enableRealtimePageBreaking: boolean;
 }
 
 export const defaultOptions: Options = {
@@ -43,7 +44,8 @@ export const defaultOptions: Options = {
 	useBase64URL: false,
 	renderChanges: false,
     renderComments: false,
-    renderAltChunks: true
+    renderAltChunks: true,
+    enableRealtimePageBreaking: false
 }
 
 export function parseAsync(data: Blob | any, userOptions?: Partial<Options>): Promise<any>  {

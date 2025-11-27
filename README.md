@@ -62,6 +62,7 @@ renderAsync(
         renderEndnotes: true, //enables endnotes rendering
         renderComments: false, //enables experimental comments rendering
         renderAltChunks: true, //enables altChunks (html parts) rendering
+        enableRealtimePageBreaking: false, //enables automatic page breaking based on content height
         debug: boolean = false, //enables additional logging
     }): Promise<WordDocument>
 
@@ -97,9 +98,25 @@ Currently library does break pages:
 - if application page break `<w:lastRenderedPageBreak/>` is inserted - could be inserted by editor application like MS word (`ignoreLastRenderedPageBreak` should be set to false)
 - if page settings for paragraph is changed - ex: user change settings from portrait to landscape page
 
-Realtime page breaking is not implemented because it's requires re-calculation of sizes on each insertion and that could affect performance a lot. 
+### Realtime Page Breaking
 
-If page breaking is crutual for you, I would recommend:
+Realtime page breaking is now available! When enabled with `enableRealtimePageBreaking: true`, the library will automatically break pages based on content height. This feature:
+
+- Measures rendered content height in real-time
+- Automatically splits pages when content exceeds available page height
+- Preserves headers and footers on each page
+- Works with all document elements (paragraphs, tables, images, etc.)
+
+**Note:** Realtime page breaking requires re-calculation of sizes after rendering and may affect performance for large documents. It is disabled by default.
+
+To enable realtime page breaking:
+```javascript
+docx.renderAsync(docData, container, null, {
+    enableRealtimePageBreaking: true
+});
+```
+
+If page breaking is crucial and you prefer not to use realtime breaking, you can:
 - try to insert manual break point as much as you could
 - try use editors like MS Word, that inserts `<w:lastRenderedPageBreak/>` break points
 

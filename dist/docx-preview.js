@@ -3089,7 +3089,133 @@
                 result.push(pageElement);
                 prevProps = props;
             }
+            if (this.options.enableRealtimePageBreaking) {
+                return this.performRealtimePageBreaking(result, document);
+            }
             return result;
+        }
+        performRealtimePageBreaking(pages, document) {
+            const result = [];
+            for (const page of pages) {
+                const sectProps = this.getSectionPropertiesFromPage(page);
+                if (!sectProps || !sectProps.pageSize || !sectProps.pageMargins) {
+                    result.push(page);
+                    continue;
+                }
+                const availableHeight = this.calculateAvailableContentHeight(page, sectProps);
+                if (availableHeight <= 0) {
+                    result.push(page);
+                    continue;
+                }
+                const splitPages = this.splitPageByHeight(page, sectProps, availableHeight, document);
+                result.push(...splitPages);
+            }
+            return result;
+        }
+        getSectionPropertiesFromPage(page) {
+            const pageSize = {
+                width: page.style.width || '8.5in',
+                height: page.style.minHeight || '11in',
+                orientation: 'portrait'
+            };
+            const pageMargins = {
+                top: page.style.paddingTop || '1in',
+                right: page.style.paddingRight || '1in',
+                bottom: page.style.paddingBottom || '1in',
+                left: page.style.paddingLeft || '1in',
+                header: '0.5in',
+                footer: '0.5in',
+                gutter: '0in'
+            };
+            return {
+                type: 'nextPage',
+                pageSize,
+                pageMargins,
+                pageBorders: null,
+                pageNumber: null,
+                columns: null,
+                footerRefs: [],
+                headerRefs: [],
+                titlePage: false
+            };
+        }
+        calculateAvailableContentHeight(page, sectProps) {
+            const pageHeight = this.lengthToPixels(sectProps.pageSize.height);
+            const topMargin = this.lengthToPixels(sectProps.pageMargins.top);
+            const bottomMargin = this.lengthToPixels(sectProps.pageMargins.bottom);
+            const header = page.querySelector('header');
+            const footer = page.querySelector('footer');
+            const headerHeight = header ? header.getBoundingClientRect().height : 0;
+            const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
+            return pageHeight - topMargin - bottomMargin - headerHeight - footerHeight;
+        }
+        splitPageByHeight(page, sectProps, availableHeight, document) {
+            const result = [];
+            const articles = Array.from(page.querySelectorAll('article'));
+            if (articles.length === 0) {
+                result.push(page);
+                return result;
+            }
+            const allElements = [];
+            for (const article of articles) {
+                allElements.push(...Array.from(article.children));
+            }
+            const header = page.querySelector('header');
+            const footer = page.querySelector('footer');
+            let totalContentHeight = 0;
+            for (const elem of allElements) {
+                totalContentHeight += elem.getBoundingClientRect().height;
+            }
+            if (totalContentHeight <= availableHeight) {
+                result.push(page);
+                return result;
+            }
+            let currentPage = null;
+            let currentArticle = null;
+            let currentHeight = 0;
+            for (let i = 0; i < allElements.length; i++) {
+                const element = allElements[i];
+                const elementHeight = element.getBoundingClientRect().height;
+                if (currentPage === null || (currentHeight + elementHeight > availableHeight && currentHeight > 0)) {
+                    if (currentPage !== null) {
+                        if (footer) {
+                            currentPage.appendChild(footer.cloneNode(true));
+                        }
+                        result.push(currentPage);
+                    }
+                    currentPage = this.createPageElement(this.className, sectProps);
+                    this.renderStyleValues(document.cssStyle, currentPage);
+                    if (header) {
+                        currentPage.appendChild(header.cloneNode(true));
+                    }
+                    currentArticle = this.createSectionContent(sectProps);
+                    currentPage.appendChild(currentArticle);
+                    currentHeight = 0;
+                }
+                if (currentArticle) {
+                    currentArticle.appendChild(element.cloneNode(true));
+                    currentHeight += elementHeight;
+                }
+            }
+            if (currentPage !== null) {
+                if (footer) {
+                    currentPage.appendChild(footer.cloneNode(true));
+                }
+                result.push(currentPage);
+            }
+            return result;
+        }
+        lengthToPixels(length) {
+            if (!length)
+                return 0;
+            const temp = this.htmlDocument.createElement('div');
+            temp.style.position = 'absolute';
+            temp.style.visibility = 'hidden';
+            temp.style.height = length;
+            this.htmlDocument.body.appendChild(temp);
+            const pixels = temp.getBoundingClientRect().height;
+            this.htmlDocument.body.removeChild(temp);
+            return pixels;
         }
         renderHeaderFooter(refs, props, page, firstOfSection, into) {
             if (!refs)
@@ -3974,7 +4100,8 @@ section.${c}>footer { z-index: 1; }
         useBase64URL: false,
         renderChanges: false,
         renderComments: false,
-        renderAltChunks: true
+        renderAltChunks: true,
+        enableRealtimePageBreaking: false
     };
     function parseAsync(data, userOptions) {
         const ops = { ...defaultOptions, ...userOptions };
