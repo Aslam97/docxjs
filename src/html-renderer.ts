@@ -490,6 +490,18 @@ export class HtmlRenderer {
 		const headerHeight = header ? header.getBoundingClientRect().height : 0;
 		const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
 
+		if (this.options.debug) {
+			console.log('[calculateAvailableContentHeightFromDOM]', {
+				minHeight: computedStyle.minHeight,
+				pageHeight,
+				paddingTop,
+				paddingBottom,
+				headerHeight,
+				footerHeight,
+				calculation: `${pageHeight} - ${paddingTop} - ${paddingBottom} - ${headerHeight} - ${footerHeight}`
+			});
+		}
+
 		// Calculate available height for content
 		return pageHeight - paddingTop - paddingBottom - headerHeight - footerHeight;
 	}
