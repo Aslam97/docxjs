@@ -2915,6 +2915,10 @@
             }
             this.postRenderTasks.forEach(t => t());
             await Promise.allSettled(this.tasks);
+            if (this.options.enableRealtimePageBreaking) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+                this.applyRealtimePageBreaking(bodyContainer, document.documentPart.body);
+            }
             this.refreshTabStops();
         }
         renderTheme(themePart, styleContainer) {
@@ -3089,92 +3093,75 @@
                 result.push(pageElement);
                 prevProps = props;
             }
-            if (this.options.enableRealtimePageBreaking) {
-                return this.performRealtimePageBreaking(result, document);
-            }
             return result;
         }
-        performRealtimePageBreaking(pages, document) {
-            const result = [];
+        applyRealtimePageBreaking(bodyContainer, document) {
+            const wrapper = bodyContainer.querySelector(`.${this.className}-wrapper`);
+            const container = wrapper || bodyContainer;
+            const pages = Array.from(container.querySelectorAll(`section.${this.className}`));
+            if (pages.length === 0)
+                return;
+            const newPages = [];
             for (const page of pages) {
-                const sectProps = this.getSectionPropertiesFromPage(page);
-                if (!sectProps || !sectProps.pageSize || !sectProps.pageMargins) {
-                    result.push(page);
-                    continue;
-                }
-                const availableHeight = this.calculateAvailableContentHeight(page, sectProps);
+                const availableHeight = this.calculateAvailableContentHeightFromDOM(page);
                 if (availableHeight <= 0) {
-                    result.push(page);
+                    newPages.push(page);
                     continue;
                 }
-                const splitPages = this.splitPageByHeight(page, sectProps, availableHeight, document);
-                result.push(...splitPages);
+                const articles = Array.from(page.querySelectorAll('article'));
+                if (articles.length === 0) {
+                    newPages.push(page);
+                    continue;
+                }
+                const contentElements = [];
+                for (const article of articles) {
+                    contentElements.push(...Array.from(article.children));
+                }
+                let totalHeight = 0;
+                for (const elem of contentElements) {
+                    totalHeight += elem.getBoundingClientRect().height;
+                }
+                if (totalHeight <= availableHeight) {
+                    newPages.push(page);
+                    continue;
+                }
+                const splitPages = this.splitPageInDOM(page, contentElements, availableHeight);
+                newPages.push(...splitPages);
             }
-            return result;
+            for (let i = 0; i < pages.length; i++) {
+                const oldPage = pages[i];
+                oldPage.remove();
+            }
+            for (const newPage of newPages) {
+                container.appendChild(newPage);
+            }
         }
-        getSectionPropertiesFromPage(page) {
-            const pageSize = {
-                width: page.style.width || '8.5in',
-                height: page.style.minHeight || '11in',
-                orientation: 'portrait'
-            };
-            const pageMargins = {
-                top: page.style.paddingTop || '1in',
-                right: page.style.paddingRight || '1in',
-                bottom: page.style.paddingBottom || '1in',
-                left: page.style.paddingLeft || '1in',
-                header: '0.5in',
-                footer: '0.5in',
-                gutter: '0in'
-            };
-            return {
-                type: 'nextPage',
-                pageSize,
-                pageMargins,
-                pageBorders: null,
-                pageNumber: null,
-                columns: null,
-                footerRefs: [],
-                headerRefs: [],
-                titlePage: false
-            };
-        }
-        calculateAvailableContentHeight(page, sectProps) {
-            const pageHeight = this.lengthToPixels(sectProps.pageSize.height);
-            const topMargin = this.lengthToPixels(sectProps.pageMargins.top);
-            const bottomMargin = this.lengthToPixels(sectProps.pageMargins.bottom);
+        calculateAvailableContentHeightFromDOM(page) {
+            const pageRect = page.getBoundingClientRect();
+            const pageHeight = pageRect.height;
+            const computedStyle = window.getComputedStyle(page);
+            const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+            const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
             const header = page.querySelector('header');
             const footer = page.querySelector('footer');
             const headerHeight = header ? header.getBoundingClientRect().height : 0;
             const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
-            return pageHeight - topMargin - bottomMargin - headerHeight - footerHeight;
+            return pageHeight - paddingTop - paddingBottom - headerHeight - footerHeight;
         }
-        splitPageByHeight(page, sectProps, availableHeight, document) {
+        splitPageInDOM(originalPage, contentElements, availableHeight) {
             const result = [];
-            const articles = Array.from(page.querySelectorAll('article'));
-            if (articles.length === 0) {
-                result.push(page);
-                return result;
-            }
-            const allElements = [];
-            for (const article of articles) {
-                allElements.push(...Array.from(article.children));
-            }
-            const header = page.querySelector('header');
-            const footer = page.querySelector('footer');
-            let totalContentHeight = 0;
-            for (const elem of allElements) {
-                totalContentHeight += elem.getBoundingClientRect().height;
-            }
-            if (totalContentHeight <= availableHeight) {
-                result.push(page);
-                return result;
-            }
+            const pageClasses = originalPage.className;
+            const pageStyle = originalPage.getAttribute('style') || '';
+            const header = originalPage.querySelector('header');
+            const footer = originalPage.querySelector('footer');
+            const originalArticle = originalPage.querySelector('article');
+            const articleClasses = originalArticle?.className || '';
+            const articleStyle = originalArticle?.getAttribute('style') || '';
             let currentPage = null;
             let currentArticle = null;
             let currentHeight = 0;
-            for (let i = 0; i < allElements.length; i++) {
-                const element = allElements[i];
+            for (let i = 0; i < contentElements.length; i++) {
+                const element = contentElements[i];
                 const elementHeight = element.getBoundingClientRect().height;
                 if (currentPage === null || (currentHeight + elementHeight > availableHeight && currentHeight > 0)) {
                     if (currentPage !== null) {
@@ -3183,12 +3170,19 @@
                         }
                         result.push(currentPage);
                     }
-                    currentPage = this.createPageElement(this.className, sectProps);
-                    this.renderStyleValues(document.cssStyle, currentPage);
+                    currentPage = this.htmlDocument.createElement('section');
+                    currentPage.className = pageClasses;
+                    if (pageStyle) {
+                        currentPage.setAttribute('style', pageStyle);
+                    }
                     if (header) {
                         currentPage.appendChild(header.cloneNode(true));
                     }
-                    currentArticle = this.createSectionContent(sectProps);
+                    currentArticle = this.htmlDocument.createElement('article');
+                    currentArticle.className = articleClasses;
+                    if (articleStyle) {
+                        currentArticle.setAttribute('style', articleStyle);
+                    }
                     currentPage.appendChild(currentArticle);
                     currentHeight = 0;
                 }
@@ -3204,18 +3198,6 @@
                 result.push(currentPage);
             }
             return result;
-        }
-        lengthToPixels(length) {
-            if (!length)
-                return 0;
-            const temp = this.htmlDocument.createElement('div');
-            temp.style.position = 'absolute';
-            temp.style.visibility = 'hidden';
-            temp.style.height = length;
-            this.htmlDocument.body.appendChild(temp);
-            const pixels = temp.getBoundingClientRect().height;
-            this.htmlDocument.body.removeChild(temp);
-            return pixels;
         }
         renderHeaderFooter(refs, props, page, firstOfSection, into) {
             if (!refs)

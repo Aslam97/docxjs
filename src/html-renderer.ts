@@ -147,6 +147,13 @@ export class HtmlRenderer {
 
 		await Promise.allSettled(this.tasks);
 
+		// Apply realtime page breaking after content is in DOM
+		if (this.options.enableRealtimePageBreaking) {
+			// Use setTimeout to ensure layout is complete
+			await new Promise(resolve => setTimeout(resolve, 0));
+			this.applyRealtimePageBreaking(bodyContainer, document.documentPart.body);
+		}
+
 		this.refreshTabStops();
 	}
 
@@ -367,80 +374,78 @@ export class HtmlRenderer {
 			prevProps = props;
 		}
 
-		// Apply realtime page breaking if enabled
-		if (this.options.enableRealtimePageBreaking) {
-			return this.performRealtimePageBreaking(result, document);
-		}
-
 		return result;
 	}
 
-	performRealtimePageBreaking(pages: HTMLElement[], document: DocumentElement): HTMLElement[] {
-		const result: HTMLElement[] = [];
+	applyRealtimePageBreaking(bodyContainer: HTMLElement, document: DocumentElement): void {
+		// Get all page elements (sections with docx class)
+		const wrapper = bodyContainer.querySelector(`.${this.className}-wrapper`);
+		const container = wrapper || bodyContainer;
+		const pages = Array.from(container.querySelectorAll(`section.${this.className}`)) as HTMLElement[];
+
+		if (pages.length === 0) return;
+
+		const newPages: HTMLElement[] = [];
 
 		for (const page of pages) {
-			// Get section properties from the page
-			const sectProps = this.getSectionPropertiesFromPage(page);
-
-			if (!sectProps || !sectProps.pageSize || !sectProps.pageMargins) {
-				// If we can't determine page properties, keep the page as-is
-				result.push(page);
-				continue;
-			}
-
-			// Calculate available content height
-			const availableHeight = this.calculateAvailableContentHeight(page, sectProps);
+			// Calculate available content height for this page
+			const availableHeight = this.calculateAvailableContentHeightFromDOM(page);
 
 			if (availableHeight <= 0) {
-				result.push(page);
+				newPages.push(page);
 				continue;
 			}
 
-			// Split the page if content exceeds available height
-			const splitPages = this.splitPageByHeight(page, sectProps, availableHeight, document);
-			result.push(...splitPages);
+			// Get all content articles
+			const articles = Array.from(page.querySelectorAll('article')) as HTMLElement[];
+			if (articles.length === 0) {
+				newPages.push(page);
+				continue;
+			}
+
+			// Collect all content elements and measure them
+			const contentElements: HTMLElement[] = [];
+			for (const article of articles) {
+				contentElements.push(...Array.from(article.children) as HTMLElement[]);
+			}
+
+			// Calculate total content height
+			let totalHeight = 0;
+			for (const elem of contentElements) {
+				totalHeight += elem.getBoundingClientRect().height;
+			}
+
+			// If content fits, keep the page as-is
+			if (totalHeight <= availableHeight) {
+				newPages.push(page);
+				continue;
+			}
+
+			// Content exceeds page height, need to split
+			const splitPages = this.splitPageInDOM(page, contentElements, availableHeight);
+			newPages.push(...splitPages);
 		}
 
-		return result;
+		// Replace old pages with new split pages
+		for (let i = 0; i < pages.length; i++) {
+			const oldPage = pages[i];
+			oldPage.remove();
+		}
+
+		for (const newPage of newPages) {
+			container.appendChild(newPage);
+		}
 	}
 
-	getSectionPropertiesFromPage(page: HTMLElement): SectionProperties | null {
-		// Extract section properties from the page's inline styles and structure
-		// This is a helper method to recover section properties from rendered page
-		const pageSize = {
-			width: page.style.width || '8.5in',
-			height: page.style.minHeight || '11in',
-			orientation: 'portrait' as "landscape" | string
-		};
+	calculateAvailableContentHeightFromDOM(page: HTMLElement): number {
+		// Get the page's computed height
+		const pageRect = page.getBoundingClientRect();
+		const pageHeight = pageRect.height;
 
-		const pageMargins = {
-			top: page.style.paddingTop || '1in',
-			right: page.style.paddingRight || '1in',
-			bottom: page.style.paddingBottom || '1in',
-			left: page.style.paddingLeft || '1in',
-			header: '0.5in',
-			footer: '0.5in',
-			gutter: '0in'
-		};
-
-		return {
-			type: 'nextPage',
-			pageSize,
-			pageMargins,
-			pageBorders: null,
-			pageNumber: null,
-			columns: null,
-			footerRefs: [],
-			headerRefs: [],
-			titlePage: false
-		};
-	}
-
-	calculateAvailableContentHeight(page: HTMLElement, sectProps: SectionProperties): number {
-		// Convert page height to pixels
-		const pageHeight = this.lengthToPixels(sectProps.pageSize.height);
-		const topMargin = this.lengthToPixels(sectProps.pageMargins.top);
-		const bottomMargin = this.lengthToPixels(sectProps.pageMargins.bottom);
+		// Get padding (margins) from computed style
+		const computedStyle = window.getComputedStyle(page);
+		const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+		const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
 
 		// Get header and footer heights
 		const header = page.querySelector('header');
@@ -449,52 +454,36 @@ export class HtmlRenderer {
 		const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
 
 		// Calculate available height for content
-		return pageHeight - topMargin - bottomMargin - headerHeight - footerHeight;
+		return pageHeight - paddingTop - paddingBottom - headerHeight - footerHeight;
 	}
 
-	splitPageByHeight(page: HTMLElement, sectProps: SectionProperties, availableHeight: number, document: DocumentElement): HTMLElement[] {
+	splitPageInDOM(originalPage: HTMLElement, contentElements: HTMLElement[], availableHeight: number): HTMLElement[] {
 		const result: HTMLElement[] = [];
-		const articles = Array.from(page.querySelectorAll('article'));
 
-		if (articles.length === 0) {
-			result.push(page);
-			return result;
-		}
+		// Extract page properties to replicate
+		const pageClasses = originalPage.className;
+		const pageStyle = originalPage.getAttribute('style') || '';
 
-		// Collect all content elements
-		const allElements: HTMLElement[] = [];
-		for (const article of articles) {
-			allElements.push(...Array.from(article.children) as HTMLElement[]);
-		}
+		// Get header and footer to clone
+		const header = originalPage.querySelector('header');
+		const footer = originalPage.querySelector('footer');
 
-		// Store header and footer for reuse
-		const header = page.querySelector('header');
-		const footer = page.querySelector('footer');
+		// Get article element to get its properties
+		const originalArticle = originalPage.querySelector('article');
+		const articleClasses = originalArticle?.className || '';
+		const articleStyle = originalArticle?.getAttribute('style') || '';
 
-		// Check if content actually exceeds available height
-		let totalContentHeight = 0;
-		for (const elem of allElements) {
-			totalContentHeight += elem.getBoundingClientRect().height;
-		}
-
-		// If content fits on one page, return original page
-		if (totalContentHeight <= availableHeight) {
-			result.push(page);
-			return result;
-		}
-
-		// Content exceeds page height, need to split
 		let currentPage: HTMLElement | null = null;
 		let currentArticle: HTMLElement | null = null;
 		let currentHeight = 0;
 
-		for (let i = 0; i < allElements.length; i++) {
-			const element = allElements[i];
+		for (let i = 0; i < contentElements.length; i++) {
+			const element = contentElements[i];
 			const elementHeight = element.getBoundingClientRect().height;
 
 			// Create new page if needed
 			if (currentPage === null || (currentHeight + elementHeight > availableHeight && currentHeight > 0)) {
-				// Save current page if exists
+				// Save current page if it exists
 				if (currentPage !== null) {
 					// Add footer to current page
 					if (footer) {
@@ -503,17 +492,24 @@ export class HtmlRenderer {
 					result.push(currentPage);
 				}
 
-				// Create new page
-				currentPage = this.createPageElement(this.className, sectProps);
-				this.renderStyleValues(document.cssStyle, currentPage);
+				// Create new page with same properties as original
+				currentPage = this.htmlDocument.createElement('section');
+				currentPage.className = pageClasses;
+				if (pageStyle) {
+					currentPage.setAttribute('style', pageStyle);
+				}
 
 				// Add header to new page
 				if (header) {
 					currentPage.appendChild(header.cloneNode(true));
 				}
 
-				// Create new article for content
-				currentArticle = this.createSectionContent(sectProps);
+				// Create new article for content with same properties
+				currentArticle = this.htmlDocument.createElement('article');
+				currentArticle.className = articleClasses;
+				if (articleStyle) {
+					currentArticle.setAttribute('style', articleStyle);
+				}
 				currentPage.appendChild(currentArticle);
 
 				// Reset height counter
@@ -536,21 +532,6 @@ export class HtmlRenderer {
 		}
 
 		return result;
-	}
-
-	lengthToPixels(length: string): number {
-		if (!length) return 0;
-
-		// Create a temporary element to measure the length
-		const temp = this.htmlDocument.createElement('div');
-		temp.style.position = 'absolute';
-		temp.style.visibility = 'hidden';
-		temp.style.height = length;
-		this.htmlDocument.body.appendChild(temp);
-		const pixels = temp.getBoundingClientRect().height;
-		this.htmlDocument.body.removeChild(temp);
-
-		return pixels;
 	}
 
 	renderHeaderFooter(refs: FooterHeaderReference[], props: SectionProperties, page: number, firstOfSection: boolean, into: HTMLElement) {
