@@ -370,6 +370,10 @@ export class HtmlRenderer {
 			this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props,
 				result.length, prevProps != props, pageElement);
 
+			// Store section properties on the element for later retrieval
+			(pageElement as any).__sectionProps = props;
+			(pageElement as any).__documentCssStyle = document.cssStyle;
+
 			result.push(pageElement);
 			prevProps = props;
 		}
@@ -393,9 +397,17 @@ export class HtmlRenderer {
 
 		for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
 			const page = pages[pageIndex];
+			const sectProps = (page as any).__sectionProps;
+			const docCssStyle = (page as any).__documentCssStyle;
+
+			if (!sectProps) {
+				// No section properties stored, keep page as-is
+				newPages.push(page);
+				continue;
+			}
 
 			// Calculate available content height for this page
-			const availableHeight = this.calculateAvailableContentHeightFromDOM(page);
+			const availableHeight = this.calculateAvailableContentHeight(sectProps, page);
 
 			if (this.options.debug) {
 				console.log(`[Page ${pageIndex + 1}] Available height: ${availableHeight}px`);
@@ -446,7 +458,7 @@ export class HtmlRenderer {
 			if (this.options.debug) {
 				console.log(`[Page ${pageIndex + 1}] Content exceeds available height, splitting...`);
 			}
-			const splitPages = this.splitPageInDOM(page, contentElements, availableHeight);
+			const splitPages = this.splitPageWithSectionProps(page, contentElements, availableHeight, sectProps, docCssStyle);
 			if (this.options.debug) {
 				console.log(`[Page ${pageIndex + 1}] Split into ${splitPages.length} page(s)`);
 			}
@@ -468,45 +480,25 @@ export class HtmlRenderer {
 		}
 	}
 
-	calculateAvailableContentHeightFromDOM(page: HTMLElement): number {
-		// Read inline style directly since getComputedStyle may return incorrect values
-		const inlineMinHeight = page.style.minHeight;
+	calculateAvailableContentHeight(sectProps: SectionProperties, page: HTMLElement): number {
+		// Use section properties directly instead of reading from DOM
+		const pageHeight = this.cssLengthToPixels(sectProps.pageSize.height);
+		const paddingTop = this.cssLengthToPixels(sectProps.pageMargins.top);
+		const paddingBottom = this.cssLengthToPixels(sectProps.pageMargins.bottom);
 
-		// Convert CSS length value to pixels
-		let pageHeight = this.cssLengthToPixels(inlineMinHeight);
-
-		// If inline style doesn't have min-height, try computed style
-		if (pageHeight === 0) {
-			const computedStyle = window.getComputedStyle(page);
-			pageHeight = parseFloat(computedStyle.minHeight) || 0;
-		}
-
-		// If still no height, use actual rendered height as fallback
-		if (pageHeight === 0) {
-			pageHeight = page.getBoundingClientRect().height;
-		}
-
-		// Get padding from inline styles first, then computed
-		let paddingTop = parseFloat(page.style.paddingTop) || 0;
-		let paddingBottom = parseFloat(page.style.paddingBottom) || 0;
-
-		if (paddingTop === 0 || paddingBottom === 0) {
-			const computedStyle = window.getComputedStyle(page);
-			paddingTop = paddingTop || parseFloat(computedStyle.paddingTop) || 0;
-			paddingBottom = paddingBottom || parseFloat(computedStyle.paddingBottom) || 0;
-		}
-
-		// Get header and footer heights
+		// Get header and footer heights from actual rendered elements
 		const header = page.querySelector('header');
 		const footer = page.querySelector('footer');
 		const headerHeight = header ? header.getBoundingClientRect().height : 0;
 		const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
 
 		if (this.options.debug) {
-			console.log('[calculateAvailableContentHeightFromDOM]', {
-				inlineMinHeight,
+			console.log('[calculateAvailableContentHeight]', {
+				pageHeightCSS: sectProps.pageSize.height,
 				pageHeight,
+				paddingTopCSS: sectProps.pageMargins.top,
 				paddingTop,
+				paddingBottomCSS: sectProps.pageMargins.bottom,
 				paddingBottom,
 				headerHeight,
 				footerHeight,
@@ -533,21 +525,15 @@ export class HtmlRenderer {
 		return pixels;
 	}
 
-	splitPageInDOM(originalPage: HTMLElement, contentElements: HTMLElement[], availableHeight: number): HTMLElement[] {
+	splitPageWithSectionProps(originalPage: HTMLElement, contentElements: HTMLElement[], availableHeight: number, sectProps: SectionProperties, docCssStyle: any): HTMLElement[] {
 		const result: HTMLElement[] = [];
-
-		// Extract page properties to replicate
-		const pageClasses = originalPage.className;
-		const pageStyle = originalPage.getAttribute('style') || '';
 
 		// Get header and footer to clone
 		const header = originalPage.querySelector('header');
 		const footer = originalPage.querySelector('footer');
 
-		// Get article element to get its properties
+		// Get article element to get its column properties
 		const originalArticle = originalPage.querySelector('article');
-		const articleClasses = originalArticle?.className || '';
-		const articleStyle = originalArticle?.getAttribute('style') || '';
 
 		let currentPage: HTMLElement | null = null;
 		let currentArticle: HTMLElement | null = null;
@@ -568,24 +554,17 @@ export class HtmlRenderer {
 					result.push(currentPage);
 				}
 
-				// Create new page with same properties as original
-				currentPage = this.htmlDocument.createElement('section');
-				currentPage.className = pageClasses;
-				if (pageStyle) {
-					currentPage.setAttribute('style', pageStyle);
-				}
+				// Create new page using original section properties
+				currentPage = this.createPageElement(this.className, sectProps);
+				this.renderStyleValues(docCssStyle, currentPage);
 
 				// Add header to new page
 				if (header) {
 					currentPage.appendChild(header.cloneNode(true));
 				}
 
-				// Create new article for content with same properties
-				currentArticle = this.htmlDocument.createElement('article');
-				currentArticle.className = articleClasses;
-				if (articleStyle) {
-					currentArticle.setAttribute('style', articleStyle);
-				}
+				// Create new article for content
+				currentArticle = this.createSectionContent(sectProps);
 				currentPage.appendChild(currentArticle);
 
 				// Reset height counter

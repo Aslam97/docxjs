@@ -3090,6 +3090,8 @@
                     this.renderNotes(this.currentEndnoteIds, this.endnoteMap, pageElement);
                 }
                 this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props, result.length, prevProps != props, pageElement);
+                pageElement.__sectionProps = props;
+                pageElement.__documentCssStyle = document.cssStyle;
                 result.push(pageElement);
                 prevProps = props;
             }
@@ -3107,7 +3109,13 @@
             const newPages = [];
             for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
                 const page = pages[pageIndex];
-                const availableHeight = this.calculateAvailableContentHeightFromDOM(page);
+                const sectProps = page.__sectionProps;
+                const docCssStyle = page.__documentCssStyle;
+                if (!sectProps) {
+                    newPages.push(page);
+                    continue;
+                }
+                const availableHeight = this.calculateAvailableContentHeight(sectProps, page);
                 if (this.options.debug) {
                     console.log(`[Page ${pageIndex + 1}] Available height: ${availableHeight}px`);
                 }
@@ -3144,7 +3152,7 @@
                 if (this.options.debug) {
                     console.log(`[Page ${pageIndex + 1}] Content exceeds available height, splitting...`);
                 }
-                const splitPages = this.splitPageInDOM(page, contentElements, availableHeight);
+                const splitPages = this.splitPageWithSectionProps(page, contentElements, availableHeight, sectProps, docCssStyle);
                 if (this.options.debug) {
                     console.log(`[Page ${pageIndex + 1}] Split into ${splitPages.length} page(s)`);
                 }
@@ -3161,32 +3169,21 @@
                 container.appendChild(newPage);
             }
         }
-        calculateAvailableContentHeightFromDOM(page) {
-            const inlineMinHeight = page.style.minHeight;
-            let pageHeight = this.cssLengthToPixels(inlineMinHeight);
-            if (pageHeight === 0) {
-                const computedStyle = window.getComputedStyle(page);
-                pageHeight = parseFloat(computedStyle.minHeight) || 0;
-            }
-            if (pageHeight === 0) {
-                pageHeight = page.getBoundingClientRect().height;
-            }
-            let paddingTop = parseFloat(page.style.paddingTop) || 0;
-            let paddingBottom = parseFloat(page.style.paddingBottom) || 0;
-            if (paddingTop === 0 || paddingBottom === 0) {
-                const computedStyle = window.getComputedStyle(page);
-                paddingTop = paddingTop || parseFloat(computedStyle.paddingTop) || 0;
-                paddingBottom = paddingBottom || parseFloat(computedStyle.paddingBottom) || 0;
-            }
+        calculateAvailableContentHeight(sectProps, page) {
+            const pageHeight = this.cssLengthToPixels(sectProps.pageSize.height);
+            const paddingTop = this.cssLengthToPixels(sectProps.pageMargins.top);
+            const paddingBottom = this.cssLengthToPixels(sectProps.pageMargins.bottom);
             const header = page.querySelector('header');
             const footer = page.querySelector('footer');
             const headerHeight = header ? header.getBoundingClientRect().height : 0;
             const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
             if (this.options.debug) {
-                console.log('[calculateAvailableContentHeightFromDOM]', {
-                    inlineMinHeight,
+                console.log('[calculateAvailableContentHeight]', {
+                    pageHeightCSS: sectProps.pageSize.height,
                     pageHeight,
+                    paddingTopCSS: sectProps.pageMargins.top,
                     paddingTop,
+                    paddingBottomCSS: sectProps.pageMargins.bottom,
                     paddingBottom,
                     headerHeight,
                     footerHeight,
@@ -3207,15 +3204,11 @@
             this.htmlDocument.body.removeChild(temp);
             return pixels;
         }
-        splitPageInDOM(originalPage, contentElements, availableHeight) {
+        splitPageWithSectionProps(originalPage, contentElements, availableHeight, sectProps, docCssStyle) {
             const result = [];
-            const pageClasses = originalPage.className;
-            const pageStyle = originalPage.getAttribute('style') || '';
             const header = originalPage.querySelector('header');
             const footer = originalPage.querySelector('footer');
-            const originalArticle = originalPage.querySelector('article');
-            const articleClasses = originalArticle?.className || '';
-            const articleStyle = originalArticle?.getAttribute('style') || '';
+            originalPage.querySelector('article');
             let currentPage = null;
             let currentArticle = null;
             let currentHeight = 0;
@@ -3229,19 +3222,12 @@
                         }
                         result.push(currentPage);
                     }
-                    currentPage = this.htmlDocument.createElement('section');
-                    currentPage.className = pageClasses;
-                    if (pageStyle) {
-                        currentPage.setAttribute('style', pageStyle);
-                    }
+                    currentPage = this.createPageElement(this.className, sectProps);
+                    this.renderStyleValues(docCssStyle, currentPage);
                     if (header) {
                         currentPage.appendChild(header.cloneNode(true));
                     }
-                    currentArticle = this.htmlDocument.createElement('article');
-                    currentArticle.className = articleClasses;
-                    if (articleStyle) {
-                        currentArticle.setAttribute('style', articleStyle);
-                    }
+                    currentArticle = this.createSectionContent(sectProps);
                     currentPage.appendChild(currentArticle);
                     currentHeight = 0;
                 }
