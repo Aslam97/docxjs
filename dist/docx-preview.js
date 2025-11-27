@@ -3162,20 +3162,29 @@
             }
         }
         calculateAvailableContentHeightFromDOM(page) {
-            const computedStyle = window.getComputedStyle(page);
-            let pageHeight = parseFloat(computedStyle.minHeight) || 0;
+            const inlineMinHeight = page.style.minHeight;
+            let pageHeight = this.cssLengthToPixels(inlineMinHeight);
             if (pageHeight === 0) {
-                pageHeight = parseFloat(computedStyle.height) || page.getBoundingClientRect().height;
+                const computedStyle = window.getComputedStyle(page);
+                pageHeight = parseFloat(computedStyle.minHeight) || 0;
             }
-            const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
-            const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
+            if (pageHeight === 0) {
+                pageHeight = page.getBoundingClientRect().height;
+            }
+            let paddingTop = parseFloat(page.style.paddingTop) || 0;
+            let paddingBottom = parseFloat(page.style.paddingBottom) || 0;
+            if (paddingTop === 0 || paddingBottom === 0) {
+                const computedStyle = window.getComputedStyle(page);
+                paddingTop = paddingTop || parseFloat(computedStyle.paddingTop) || 0;
+                paddingBottom = paddingBottom || parseFloat(computedStyle.paddingBottom) || 0;
+            }
             const header = page.querySelector('header');
             const footer = page.querySelector('footer');
             const headerHeight = header ? header.getBoundingClientRect().height : 0;
             const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
             if (this.options.debug) {
                 console.log('[calculateAvailableContentHeightFromDOM]', {
-                    minHeight: computedStyle.minHeight,
+                    inlineMinHeight,
                     pageHeight,
                     paddingTop,
                     paddingBottom,
@@ -3185,6 +3194,18 @@
                 });
             }
             return pageHeight - paddingTop - paddingBottom - headerHeight - footerHeight;
+        }
+        cssLengthToPixels(cssValue) {
+            if (!cssValue)
+                return 0;
+            const temp = this.htmlDocument.createElement('div');
+            temp.style.position = 'absolute';
+            temp.style.visibility = 'hidden';
+            temp.style.height = cssValue;
+            this.htmlDocument.body.appendChild(temp);
+            const pixels = temp.offsetHeight;
+            this.htmlDocument.body.removeChild(temp);
+            return pixels;
         }
         splitPageInDOM(originalPage, contentElements, availableHeight) {
             const result = [];

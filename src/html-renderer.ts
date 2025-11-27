@@ -469,20 +469,32 @@ export class HtmlRenderer {
 	}
 
 	calculateAvailableContentHeightFromDOM(page: HTMLElement): number {
-		// Get the intended page height from CSS (min-height), not actual rendered height
-		const computedStyle = window.getComputedStyle(page);
+		// Read inline style directly since getComputedStyle may return incorrect values
+		const inlineMinHeight = page.style.minHeight;
 
-		// Use min-height as the intended page height (e.g., "841.9pt" for A4)
-		let pageHeight = parseFloat(computedStyle.minHeight) || 0;
+		// Convert CSS length value to pixels
+		let pageHeight = this.cssLengthToPixels(inlineMinHeight);
 
-		// If min-height is not set, fall back to height or actual height
+		// If inline style doesn't have min-height, try computed style
 		if (pageHeight === 0) {
-			pageHeight = parseFloat(computedStyle.height) || page.getBoundingClientRect().height;
+			const computedStyle = window.getComputedStyle(page);
+			pageHeight = parseFloat(computedStyle.minHeight) || 0;
 		}
 
-		// Get padding (margins) from computed style
-		const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
-		const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
+		// If still no height, use actual rendered height as fallback
+		if (pageHeight === 0) {
+			pageHeight = page.getBoundingClientRect().height;
+		}
+
+		// Get padding from inline styles first, then computed
+		let paddingTop = parseFloat(page.style.paddingTop) || 0;
+		let paddingBottom = parseFloat(page.style.paddingBottom) || 0;
+
+		if (paddingTop === 0 || paddingBottom === 0) {
+			const computedStyle = window.getComputedStyle(page);
+			paddingTop = paddingTop || parseFloat(computedStyle.paddingTop) || 0;
+			paddingBottom = paddingBottom || parseFloat(computedStyle.paddingBottom) || 0;
+		}
 
 		// Get header and footer heights
 		const header = page.querySelector('header');
@@ -492,7 +504,7 @@ export class HtmlRenderer {
 
 		if (this.options.debug) {
 			console.log('[calculateAvailableContentHeightFromDOM]', {
-				minHeight: computedStyle.minHeight,
+				inlineMinHeight,
 				pageHeight,
 				paddingTop,
 				paddingBottom,
@@ -504,6 +516,21 @@ export class HtmlRenderer {
 
 		// Calculate available height for content
 		return pageHeight - paddingTop - paddingBottom - headerHeight - footerHeight;
+	}
+
+	cssLengthToPixels(cssValue: string): number {
+		if (!cssValue) return 0;
+
+		// Create a temporary element to convert CSS units to pixels
+		const temp = this.htmlDocument.createElement('div');
+		temp.style.position = 'absolute';
+		temp.style.visibility = 'hidden';
+		temp.style.height = cssValue;
+		this.htmlDocument.body.appendChild(temp);
+		const pixels = temp.offsetHeight;
+		this.htmlDocument.body.removeChild(temp);
+
+		return pixels;
 	}
 
 	splitPageInDOM(originalPage: HTMLElement, contentElements: HTMLElement[], availableHeight: number): HTMLElement[] {
