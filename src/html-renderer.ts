@@ -385,11 +385,21 @@ export class HtmlRenderer {
 
 		if (pages.length === 0) return;
 
+		if (this.options.debug) {
+			console.log(`[Realtime Page Breaking] Found ${pages.length} page(s) to process`);
+		}
+
 		const newPages: HTMLElement[] = [];
 
-		for (const page of pages) {
+		for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+			const page = pages[pageIndex];
+
 			// Calculate available content height for this page
 			const availableHeight = this.calculateAvailableContentHeightFromDOM(page);
+
+			if (this.options.debug) {
+				console.log(`[Page ${pageIndex + 1}] Available height: ${availableHeight}px`);
+			}
 
 			if (availableHeight <= 0) {
 				newPages.push(page);
@@ -409,21 +419,42 @@ export class HtmlRenderer {
 				contentElements.push(...Array.from(article.children) as HTMLElement[]);
 			}
 
+			if (this.options.debug) {
+				console.log(`[Page ${pageIndex + 1}] Found ${contentElements.length} content elements`);
+			}
+
 			// Calculate total content height
 			let totalHeight = 0;
 			for (const elem of contentElements) {
 				totalHeight += elem.getBoundingClientRect().height;
 			}
 
+			if (this.options.debug) {
+				console.log(`[Page ${pageIndex + 1}] Total content height: ${totalHeight}px`);
+			}
+
 			// If content fits, keep the page as-is
 			if (totalHeight <= availableHeight) {
+				if (this.options.debug) {
+					console.log(`[Page ${pageIndex + 1}] Content fits, keeping as single page`);
+				}
 				newPages.push(page);
 				continue;
 			}
 
 			// Content exceeds page height, need to split
+			if (this.options.debug) {
+				console.log(`[Page ${pageIndex + 1}] Content exceeds available height, splitting...`);
+			}
 			const splitPages = this.splitPageInDOM(page, contentElements, availableHeight);
+			if (this.options.debug) {
+				console.log(`[Page ${pageIndex + 1}] Split into ${splitPages.length} page(s)`);
+			}
 			newPages.push(...splitPages);
+		}
+
+		if (this.options.debug) {
+			console.log(`[Realtime Page Breaking] Final result: ${newPages.length} page(s)`);
 		}
 
 		// Replace old pages with new split pages
@@ -438,12 +469,18 @@ export class HtmlRenderer {
 	}
 
 	calculateAvailableContentHeightFromDOM(page: HTMLElement): number {
-		// Get the page's computed height
-		const pageRect = page.getBoundingClientRect();
-		const pageHeight = pageRect.height;
+		// Get the intended page height from CSS (min-height), not actual rendered height
+		const computedStyle = window.getComputedStyle(page);
+
+		// Use min-height as the intended page height (e.g., "841.9pt" for A4)
+		let pageHeight = parseFloat(computedStyle.minHeight) || 0;
+
+		// If min-height is not set, fall back to height or actual height
+		if (pageHeight === 0) {
+			pageHeight = parseFloat(computedStyle.height) || page.getBoundingClientRect().height;
+		}
 
 		// Get padding (margins) from computed style
-		const computedStyle = window.getComputedStyle(page);
 		const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
 		const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
 

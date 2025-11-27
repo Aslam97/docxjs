@@ -3101,9 +3101,16 @@
             const pages = Array.from(container.querySelectorAll(`section.${this.className}`));
             if (pages.length === 0)
                 return;
+            if (this.options.debug) {
+                console.log(`[Realtime Page Breaking] Found ${pages.length} page(s) to process`);
+            }
             const newPages = [];
-            for (const page of pages) {
+            for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+                const page = pages[pageIndex];
                 const availableHeight = this.calculateAvailableContentHeightFromDOM(page);
+                if (this.options.debug) {
+                    console.log(`[Page ${pageIndex + 1}] Available height: ${availableHeight}px`);
+                }
                 if (availableHeight <= 0) {
                     newPages.push(page);
                     continue;
@@ -3117,16 +3124,34 @@
                 for (const article of articles) {
                     contentElements.push(...Array.from(article.children));
                 }
+                if (this.options.debug) {
+                    console.log(`[Page ${pageIndex + 1}] Found ${contentElements.length} content elements`);
+                }
                 let totalHeight = 0;
                 for (const elem of contentElements) {
                     totalHeight += elem.getBoundingClientRect().height;
                 }
+                if (this.options.debug) {
+                    console.log(`[Page ${pageIndex + 1}] Total content height: ${totalHeight}px`);
+                }
                 if (totalHeight <= availableHeight) {
+                    if (this.options.debug) {
+                        console.log(`[Page ${pageIndex + 1}] Content fits, keeping as single page`);
+                    }
                     newPages.push(page);
                     continue;
                 }
+                if (this.options.debug) {
+                    console.log(`[Page ${pageIndex + 1}] Content exceeds available height, splitting...`);
+                }
                 const splitPages = this.splitPageInDOM(page, contentElements, availableHeight);
+                if (this.options.debug) {
+                    console.log(`[Page ${pageIndex + 1}] Split into ${splitPages.length} page(s)`);
+                }
                 newPages.push(...splitPages);
+            }
+            if (this.options.debug) {
+                console.log(`[Realtime Page Breaking] Final result: ${newPages.length} page(s)`);
             }
             for (let i = 0; i < pages.length; i++) {
                 const oldPage = pages[i];
@@ -3137,9 +3162,11 @@
             }
         }
         calculateAvailableContentHeightFromDOM(page) {
-            const pageRect = page.getBoundingClientRect();
-            const pageHeight = pageRect.height;
             const computedStyle = window.getComputedStyle(page);
+            let pageHeight = parseFloat(computedStyle.minHeight) || 0;
+            if (pageHeight === 0) {
+                pageHeight = parseFloat(computedStyle.height) || page.getBoundingClientRect().height;
+            }
             const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
             const paddingBottom = parseFloat(computedStyle.paddingBottom) || 0;
             const header = page.querySelector('header');
